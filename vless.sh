@@ -568,6 +568,24 @@ uninstall_xray() {
   log "卸载完成。"
 }
 
+start_xray() {
+  need_root
+  systemctl start xray
+  log "已启动 xray 服务。"
+}
+
+stop_xray() {
+  need_root
+  systemctl stop xray
+  log "已停止 xray 服务。"
+}
+
+restart_xray() {
+  need_root
+  systemctl restart xray
+  log "已重启 xray 服务。"
+}
+
 status_xray() { systemctl --no-pager --full status xray || true; }
 logs_xray()   { journalctl -u xray -e --no-pager || true; }
 
@@ -857,6 +875,9 @@ menu() {
     echo "1) 安装（VLESS + REALITY + Vision）"
     echo "2) 卸载（停止服务 + 删除文件/用户）"
     echo "3) 查看状态"
+    echo "3a) 启动服务"
+    echo "3b) 停止服务"
+    echo "3c) 重启服务"
     echo "4) 显示客户端链接"
     echo "5) 修改端口"
     echo "6) 查看用户（UUID 列表）"
@@ -876,6 +897,10 @@ menu() {
       2) uninstall_xray ;;
     
       3) status_xray;         pause_or_exit ;;
+      3a) start_xray; pause_or_exit ;;
+      3b) stop_xray; pause_or_exit ;;
+      3c) restart_xray; pause_or_exit ;;
+
       4) show_links;          pause_or_exit ;;
       5) set_port;            pause_or_exit ;;
       6) list_users;          pause_or_exit ;;
