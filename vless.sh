@@ -875,9 +875,6 @@ menu() {
     echo "1) 安装（VLESS + REALITY + Vision）"
     echo "2) 卸载（停止服务 + 删除文件/用户）"
     echo "3) 查看状态"
-    echo "3a) 启动服务"
-    echo "3b) 停止服务"
-    echo "3c) 重启服务"
     echo "4) 显示客户端链接"
     echo "5) 修改端口"
     echo "6) 查看用户（UUID 列表）"
@@ -888,6 +885,9 @@ menu() {
     echo "11) 查看日志（journalctl）"
     echo "12) 查看配置备份"
     echo "13) 回滚配置"
+    echo "14) 启动服务"
+    echo "15) 停止服务"
+    echo "16) 重启服务"
     echo "0) 退出"
     echo "======================================================"
     read -r -p "请选择操作编号： " choice
@@ -895,12 +895,7 @@ menu() {
     case "$choice" in
       1) install_xray ;;
       2) uninstall_xray ;;
-    
       3) status_xray;         pause_or_exit ;;
-      3a) start_xray; pause_or_exit ;;
-      3b) stop_xray; pause_or_exit ;;
-      3c) restart_xray; pause_or_exit ;;
-
       4) show_links;          pause_or_exit ;;
       5) set_port;            pause_or_exit ;;
       6) list_users;          pause_or_exit ;;
@@ -911,7 +906,9 @@ menu() {
       11) logs_xray;          pause_or_exit ;;
       12) menu_list_backups;  pause_or_exit ;;
       13) menu_rollback;      pause_or_exit ;;
-    
+      14) start_xray; pause_or_exit ;;
+      15) stop_xray; pause_or_exit ;;
+      16) restart_xray; pause_or_exit ;;
       0) exit 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
