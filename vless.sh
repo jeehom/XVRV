@@ -78,7 +78,7 @@ download_xray() {
   url="https://github.com/XTLS/Xray-core/releases/download/${tag}/${filename}"
 
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
+  trap '[[ -n "${tmpdir:-}" ]] && rm -rf "$tmpdir"' EXIT
 
   log "正在下载 Xray ${tag}（${filename}）..."
   curl -fL --retry 3 --retry-delay 1 -o "${tmpdir}/${filename}" "$url"
