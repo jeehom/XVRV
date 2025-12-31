@@ -103,9 +103,15 @@ update_xray() {
   echo "最新版本：${latest_ver}"
   echo
 
-  if [[ -n "$installed_ver" && "$installed_ver" == "$latest_ver" ]]; then
-    log "已是最新版本，无需更新。"
-    return 0
+  # 如果能解析到版本号，做一次简单的“是否需要更新”判断
+  if [[ -n "$installed_ver" ]]; then
+    # sort -V 支持按版本号排序
+    local newest
+    newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
+    if [[ "$newest" == "$installed_ver" ]]; then
+      log "当前版本（${installed_ver}）不低于最新版本（${latest_ver}），无需更新。"
+      return 0
+    fi
   fi
 
   # 交互确认（回车取消不更新）
@@ -1237,8 +1243,8 @@ menu() {
     read -r -p "请选择操作编号： " choice
 
     case "$choice" in
-      1) install_xray ;;
-      2) uninstall_xray ;;
+      1) install_xray;        pause_or_exit ;;
+      2) uninstall_xray;      pause_or_exit ;;
       3) service_menu ;;
       4) show_links;          pause_or_exit ;;
       5) set_port;            pause_or_exit ;;
@@ -1254,9 +1260,9 @@ menu() {
       0) exit 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
-
   done
 }
+
 
 usage() {
   cat <<EOF
