@@ -223,13 +223,27 @@ gen_short_id() {
 }
 
 gen_reality_keypair() {
+  # Newer xray prints:
+  #   PrivateKey: ...
+  #   Password:  ...   (this is used as REALITY "public key"/pbk)
+  #   Hash32:    ...   (not used by REALITY)
+  # Older xray prints:
+  #   Private key: ...
+  #   Public key: ...
   local out priv pub
-  out="$("${XRAY_BIN}" x25519)"
-  priv="$(echo "$out" | awk -F': ' '/Private key/ {print $2}')"
-  pub="$(echo "$out" | awk -F': ' '/Public key/ {print $2}')"
-  [[ -n "$priv" && -n "$pub" ]] || die "Failed to generate x25519 keypair."
+  out="$("${XRAY_BIN}" x25519 2>&1 || true)"
+
+  priv="$(echo "$out" | awk -F': *' '/^(Private key|PrivateKey):/ {print $2; exit}')"
+  pub="$(echo "$out" | awk -F': *' '/^(Public key|Password):/ {print $2; exit}')"
+
+  if [[ -z "$priv" || -z "$pub" ]]; then
+    echo "$out" >&2
+    die "Failed to generate x25519 keypair (output format may have changed)."
+  fi
+
   echo "$priv|$pub"
 }
+
 
 # ======= NEW: Install interactive flow (per your requirements) =======
 prompt_install_params() {
