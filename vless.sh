@@ -880,14 +880,26 @@ pause_or_exit() {
 }
 
 show_ipv4_prefer_status() {
-  local line
-  line="$(grep -nE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF" 2>/dev/null || true)"
-  if [[ -n "$line" ]]; then
-    echo "IPv4 优先：已启用（$GAI_CONF 存在 precedence 规则）"
+  if [[ ! -f "$GAI_CONF" ]]; then
+    echo "IPv4 优先：未启用（$GAI_CONF 不存在）"
+    return 0
+  fi
+
+  local enabled commented
+  enabled="$(grep -nE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF" 2>/dev/null || true)"
+  commented="$(grep -nE '^[[:space:]]*#[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF" 2>/dev/null || true)"
+
+  if [[ -n "$enabled" ]]; then
+    echo "IPv4 优先：已启用（命中行如下）"
+    echo "$enabled"
+  elif [[ -n "$commented" ]]; then
+    echo "IPv4 优先：未启用（存在被注释的规则）"
+    echo "$commented"
   else
-    echo "IPv4 优先：未启用（或被注释）"
+    echo "IPv4 优先：未启用（未找到 precedence 规则）"
   fi
 }
+
 
 set_ipv4_prefer() {
   need_root
@@ -936,16 +948,45 @@ restore_ipv4_prefer() {
 }
 
 show_ipv6_status() {
-  local a d
+  local a d lo
   a="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "unknown")"
   d="$(sysctl -n net.ipv6.conf.default.disable_ipv6 2>/dev/null || echo "unknown")"
-  echo "当前 sysctl：all.disable_ipv6=${a}  default.disable_ipv6=${d}"
-  if [[ -f "$IPV6_SYSCTL_DROPIN" ]]; then
-    echo "IPv6 禁用配置文件：存在（$IPV6_SYSCTL_DROPIN）"
+  lo="$(sysctl -n net.ipv6.conf.lo.disable_ipv6 2>/dev/null || echo "unknown")"
+
+  echo "当前 sysctl：all.disable_ipv6=${a}  default.disable_ipv6=${d}  lo.disable_ipv6=${lo}"
+
+  if [[ "$a" == "1" || "$d" == "1" || "$lo" == "1" ]]; then
+    echo "IPv6 当前状态：已禁用（至少一个 disable_ipv6=1）"
+  elif [[ "$a" == "0" && "$d" == "0" && "$lo" == "0" ]]; then
+    echo "IPv6 当前状态：未禁用（disable_ipv6 全为 0）"
   else
-    echo "IPv6 禁用配置文件：不存在"
+    echo "IPv6 当前状态：未知（无法读取完整 sysctl 值）"
+  fi
+
+  if [[ -f "$IPV6_SYSCTL_DROPIN" ]]; then
+    echo "脚本禁用配置文件：存在（$IPV6_SYSCTL_DROPIN）"
+  else
+    echo "脚本禁用配置文件：不存在（$IPV6_SYSCTL_DROPIN）"
+  fi
+
+  # 查找其它来源：/etc/sysctl.conf 与 /etc/sysctl.d
+  local hits
+  hits="$(grep -R --line-number -E '^[[:space:]]*net\.ipv6\.conf\.(all|default|lo)\.disable_ipv6[[:space:]]*=[[:space:]]*1' \
+    /etc/sysctl.conf /etc/sysctl.d 2>/dev/null | head -n 10 || true)"
+
+  if [[ -n "$hits" ]]; then
+    echo "检测到可能的“禁用来源”（文件中设置为 1）："
+    echo "$hits"
+  else
+    echo "未在 /etc/sysctl.conf 或 /etc/sysctl.d 检测到 disable_ipv6=1（可能由其它方式设置）。"
+  fi
+
+  # 检查内核启动参数
+  if grep -q 'ipv6.disable=1' /proc/cmdline 2>/dev/null; then
+    echo "检测到内核启动参数：ipv6.disable=1（这会强制禁用 IPv6）"
   fi
 }
+
 
 disable_ipv6() {
   need_root
