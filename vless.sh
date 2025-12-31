@@ -674,11 +674,32 @@ set_ipv4_domains() {
   need_root
   require_config
   local csv="${1:-}"
-  if [[ -z "$csv" ]]; then
-    echo "请输入需要强制走 IPv4 出口的域名（逗号分隔），留空表示清空："
+
+  # 命令行参数传入：保持原行为（允许传空来清空）
+  if [[ -n "${1+set}" ]]; then
+    XRAY_IPV4_DOMAINS="$csv"
+  else
+    echo "请输入需要强制走 IPv4 出口的域名（逗号分隔）。"
+    echo "  - 直接回车：取消，不做任何修改"
+    echo "  - 输入 0 或 q：取消，不做任何修改"
+    echo "  - 输入 clear：清空 IPv4 分流域名"
     read -r -p "域名列表： " csv
+
+    case "${csv:-}" in
+      ""|0|q|Q)
+        log "已取消，未修改配置。"
+        return 0
+        ;;
+      clear|CLEAR|Clear)
+        csv=""
+        ;;
+      *)
+        # 正常输入：继续
+        ;;
+    esac
+
+    XRAY_IPV4_DOMAINS="$csv"
   fi
-  XRAY_IPV4_DOMAINS="$csv"
 
   local domains_json
   domains_json="$(normalize_domains_to_json_array "${XRAY_IPV4_DOMAINS}")"
@@ -693,10 +714,16 @@ set_ipv4_domains() {
       )' --argjson ipv4domains "${domains_json}"
 
   restart_if_running
-  log "IPv4 分流域名已更新。"
+  if [[ -z "${XRAY_IPV4_DOMAINS}" ]]; then
+    log "已清空 IPv4 分流域名。"
+  else
+    log "IPv4 分流域名已更新。"
+  fi
+
   echo "当前 routing.rules[0]（如已设置）："
   jq -r '.routing.rules[0] // empty' "${XRAY_CFG}" || true
 }
+
 
 menu_list_backups() {
   echo
