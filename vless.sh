@@ -21,6 +21,9 @@ XRAY_CFG="${XRAY_ETC_DIR}/config.json"
 XRAY_PUBKEY_FILE="${XRAY_ETC_DIR}/reality_public.key"
 XRAY_SYSTEMD="/etc/systemd/system/xray.service"
 XRAY_LOG_DIR="/var/log/xray"
+GAI_CONF="/etc/gai.conf"
+IPV6_SYSCTL_DROPIN="/etc/sysctl.d/99-xray-disable-ipv6.conf"
+
 
 # 默认值（可用环境变量覆盖）
 XRAY_PORT="${XRAY_PORT:-}"                 # 空 => 安装交互时默认随机端口
@@ -117,6 +120,17 @@ backup_config() {
     log "已创建配置备份：${bak}"
   fi
 }
+
+backup_file() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  local ts bak
+  ts="$(date +"%Y%m%d-%H%M%S")"
+  bak="${f}.bak-${ts}"
+  cp -a "$f" "$bak"
+  log "已创建备份：${bak}"
+}
+
 
 list_backups() {
   ls -1 "${XRAY_CFG}.bak-"* 2>/dev/null | sort || true
@@ -867,6 +881,119 @@ pause_or_exit() {
   done
 }
 
+show_ipv4_prefer_status() {
+  local line
+  line="$(grep -nE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF" 2>/dev/null || true)"
+  if [[ -n "$line" ]]; then
+    echo "IPv4 优先：已启用（$GAI_CONF 存在 precedence 规则）"
+  else
+    echo "IPv4 优先：未启用（或被注释）"
+  fi
+}
+
+set_ipv4_prefer() {
+  need_root
+  # 确保文件存在
+  [[ -f "$GAI_CONF" ]] || touch "$GAI_CONF"
+
+  echo
+  echo "=== 设置 IPv4 优先（glibc gai.conf）==="
+  show_ipv4_prefer_status
+
+  backup_file "$GAI_CONF"
+
+  # 1) 如果存在被注释的规则，取消注释
+  if grep -qE '^[[:space:]]*#[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF"; then
+    sed -i -E 's/^[[:space:]]*#[[:space:]]*(precedence[[:space:]]+::ffff:0:0\/96[[:space:]]+100)/\1/' "$GAI_CONF"
+  else
+    # 2) 如果不存在该规则，则追加
+    if ! grep -qE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF"; then
+      printf "\n# 由 xray 管理脚本添加：优先使用 IPv4\nprecedence ::ffff:0:0/96  100\n" >> "$GAI_CONF"
+    fi
+  fi
+
+  log "已设置 IPv4 优先。部分程序可能需要重启后才完全生效。"
+  show_ipv4_prefer_status
+}
+
+restore_ipv4_prefer() {
+  need_root
+  [[ -f "$GAI_CONF" ]] || die "找不到 $GAI_CONF"
+
+  echo
+  echo "=== 恢复默认（取消 IPv4 优先）==="
+  show_ipv4_prefer_status
+
+  # 只有在确实启用时才备份并改动
+  if grep -qE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' "$GAI_CONF"; then
+    backup_file "$GAI_CONF"
+    # 注释掉所有启用的 precedence 行（保守可逆）
+    sed -i -E 's/^[[:space:]]*(precedence[[:space:]]+::ffff:0:0\/96[[:space:]]+100)/# \1/' "$GAI_CONF"
+    log "已取消 IPv4 优先（已将 precedence 行注释）。"
+  else
+    log "当前未启用 IPv4 优先，无需修改。"
+  fi
+
+  show_ipv4_prefer_status
+}
+
+show_ipv6_status() {
+  local a d
+  a="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "unknown")"
+  d="$(sysctl -n net.ipv6.conf.default.disable_ipv6 2>/dev/null || echo "unknown")"
+  echo "当前 sysctl：all.disable_ipv6=${a}  default.disable_ipv6=${d}"
+  if [[ -f "$IPV6_SYSCTL_DROPIN" ]]; then
+    echo "IPv6 禁用配置文件：存在（$IPV6_SYSCTL_DROPIN）"
+  else
+    echo "IPv6 禁用配置文件：不存在"
+  fi
+}
+
+disable_ipv6() {
+  need_root
+  echo
+  echo "=== 禁用服务器 IPv6（sysctl）==="
+  echo "提示：如果你通过 IPv6 登录/依赖 IPv6 业务，禁用后可能断连或影响服务。"
+  show_ipv6_status
+
+  # 如已存在则备份再覆盖
+  if [[ -f "$IPV6_SYSCTL_DROPIN" ]]; then
+    backup_file "$IPV6_SYSCTL_DROPIN"
+  fi
+
+  cat > "$IPV6_SYSCTL_DROPIN" <<'EOF'
+# 由 xray 管理脚本写入：禁用 IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+
+  sysctl --system >/dev/null 2>&1 || true
+
+  log "已写入并应用：禁用 IPv6。"
+  show_ipv6_status
+}
+
+restore_ipv6() {
+  need_root
+  echo
+  echo "=== 恢复 IPv6（撤销禁用）==="
+  show_ipv6_status
+
+  if [[ -f "$IPV6_SYSCTL_DROPIN" ]]; then
+    backup_file "$IPV6_SYSCTL_DROPIN"
+    rm -f "$IPV6_SYSCTL_DROPIN"
+  fi
+
+  # 恢复为 0（即时生效），然后重载 sysctl
+  sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1 || true
+  sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1 || true
+  sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1 || true
+  sysctl --system >/dev/null 2>&1 || true
+
+  log "已撤销禁用设置并尝试恢复 IPv6。"
+  show_ipv6_status
+}
 
 menu() {
   while true; do
@@ -888,6 +1015,10 @@ menu() {
     echo "14) 启动服务"
     echo "15) 停止服务"
     echo "16) 重启服务"
+    echo "17) 设置服务器 IPv4 优先（gai.conf）"
+    echo "18) 恢复默认地址优先级（取消 IPv4 优先）"
+    echo "19) 禁用服务器 IPv6（sysctl）"
+    echo "20) 恢复服务器 IPv6（撤销禁用）"
     echo "0) 退出"
     echo "======================================================"
     read -r -p "请选择操作编号： " choice
@@ -909,6 +1040,10 @@ menu() {
       14) start_xray; pause_or_exit ;;
       15) stop_xray; pause_or_exit ;;
       16) restart_xray; pause_or_exit ;;
+      17) set_ipv4_prefer;      pause_or_exit ;;
+      18) restore_ipv4_prefer;  pause_or_exit ;;
+      19) disable_ipv6;         pause_or_exit ;;
+      20) restore_ipv6;         pause_or_exit ;;
       0) exit 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
