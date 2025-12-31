@@ -23,6 +23,9 @@ XRAY_SYSTEMD="/etc/systemd/system/xray.service"
 XRAY_LOG_DIR="/var/log/xray"
 GAI_CONF="/etc/gai.conf"
 IPV6_SYSCTL_DROPIN="/etc/sysctl.d/99-xray-disable-ipv6.conf"
+SELF_URL="${SELF_URL:-https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh}"
+SELF_INSTALL_PATH_DEFAULT="/usr/local/bin/vless"
+
 
 # 默认值（可用环境变量覆盖）
 XRAY_PORT="${XRAY_PORT:-}"                 # 空 => 安装交互时默认随机端口
@@ -1260,6 +1263,84 @@ service_menu() {
   done
 }
 
+update_self() {
+  # 需要写 /usr/local/bin，最好要求 root
+  need_root
+
+  local url="${SELF_URL}"
+  local cur="${0}"
+  local target=""
+
+  echo
+  echo "=== 更新脚本 ==="
+  echo "更新地址：${url}"
+  echo "当前运行路径：${cur}"
+
+  # 优先更新“固定安装路径”，这样下次命令最简单：sudo -i vless
+  target="${SELF_INSTALL_PATH_DEFAULT}"
+
+  # 如果当前就是 /usr/local/bin/vless，也可以直接覆盖它（等价）
+  if [[ "$(readlink -f "$cur" 2>/dev/null || echo "$cur")" == "$target" ]]; then
+    target="$cur"
+  fi
+
+  echo "将更新到：${target}"
+  echo
+
+  read -r -p "输入 YES 确认更新（回车/0/q 取消）： " ans
+  case "${ans:-}" in
+    YES) ;;
+    ""|0|q|Q)
+      log "已取消更新脚本。"
+      return 0
+      ;;
+    *)
+      warn "未输入 YES，已取消。"
+      return 0
+      ;;
+  esac
+
+  local tmp ts bak
+  tmp="$(mktemp -t vless.XXXXXX)"
+  ts="$(date +"%Y%m%d-%H%M%S")"
+  trap 'rm -f "$tmp"' RETURN
+
+  log "正在下载最新脚本..."
+  if ! curl -fsSL --retry 3 --retry-delay 1 "$url" -o "$tmp"; then
+    warn "下载失败：请检查 GitHub raw 是否可访问。"
+    return 0
+  fi
+
+  # 简单自检：避免下载到 HTML/错误页
+  if ! head -n 1 "$tmp" | grep -qE '^#!/usr/bin/env bash'; then
+    warn "下载内容疑似不是脚本（首行不是 shebang）。已取消写入。"
+    echo "前几行内容如下："
+    head -n 5 "$tmp" || true
+    return 0
+  fi
+
+  # 备份旧文件（如果存在）
+  if [[ -f "$target" ]]; then
+    bak="${target}.bak-${ts}"
+    cp -a "$target" "$bak" || true
+    log "已备份旧脚本：${bak}"
+  fi
+
+  install -m 0755 "$tmp" "$target"
+  log "脚本已更新：${target}"
+
+  echo
+  echo "下次运行你可以直接用："
+  echo "  sudo -i ${target}"
+  echo
+
+  # 可选：是否立刻重启脚本（用新版本重新启动）
+  read -r -p "是否立即用新版本重新启动脚本？输入 YES 立即重启（回车跳过）： " r
+  if [[ "${r:-}" == "YES" ]]; then
+    exec "$target"
+  fi
+}
+
 menu() {
   while true; do
     echo
@@ -1278,6 +1359,7 @@ menu() {
     echo "12) 查看配置备份"
     echo "13) 回滚配置"
     echo "14) 服务器设置"
+    echo "15) 更新脚本"
     echo "0) 退出"
     echo "======================================================"
     read -r -p "请选择操作编号： " choice
@@ -1297,6 +1379,7 @@ menu() {
       12) menu_list_backups;  pause_or_exit ;;
       13) menu_rollback;      pause_or_exit ;;
       14) server_settings_menu ;;
+      15) update_self; pause_or_exit ;;
       0) exit 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
