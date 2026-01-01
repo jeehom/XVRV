@@ -5,7 +5,7 @@ set -euo pipefail
 # Xray VLESS + REALITY + Vision 管理脚本（Debian/Ubuntu）
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 11:08"
+SCRIPT_VERSION="2026-01-01 11:10"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -1356,8 +1356,8 @@ auto_check_self_update() {
   echo "[!] 检测到脚本有新版本："
   echo "    本地：${local_ver}"
   echo "    远端：${remote_ver}"
-  read -r -p "是否现在更新脚本？输入 YES 更新（回车跳过）： " ans
-  if [[ "${ans:-}" == "YES" ]]; then
+  read -r -p "是否现在更新脚本？输入 yes 更新（回车跳过）： " ans
+  if [[ "${ans:-}" == "yes" ]]; then
     UPDATE_SELF_MODE="auto" update_self
   fi
 }
