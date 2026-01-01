@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 19:56"
+SCRIPT_VERSION="2026-01-01 20:13"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -41,6 +41,17 @@ XRAY_IPV4_DOMAINS="${XRAY_IPV4_DOMAINS:-}"
 log()  { echo -e "[*] $*"; }
 warn() { echo -e "[!] $*" >&2; }
 die()  { echo -e "[x] $*" >&2; exit 1; }
+confirm_yes() {
+  local prompt="${1:-输入 yes 确认： }"
+  local ans=""
+  read -r -p "$prompt" ans
+  case "${ans:-}" in
+    yes) return 0 ;;
+    ""|0|q|Q) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
 
 # ================= HY2 (Hysteria 2) =================
 HY2_INSTALL_URL="${HY2_INSTALL_URL:-https://get.hy2.sh/}"
