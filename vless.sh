@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 17:52"
+SCRIPT_VERSION="2026-01-01 19:50"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -54,6 +54,7 @@ HY2_BIN_CANDIDATES=(
   "/usr/bin/hysteria"
   "$(command -v hysteria 2>/dev/null || true)"
 )
+
 
 
 need_root() {
@@ -299,15 +300,11 @@ hy2_fetch_latest_tag() {
   return 1
 }
 
-install_hy2() {
+install_or_upgrade_hy2() {
   need_root
   echo
   echo "=== 安装/升级 HY2（Hysteria 2）==="
-  echo "将执行官方安装脚本：bash <(curl -fsSL ${HY2_INSTALL_URL})"
-  echo "提示：脚本只会生成示例配置，实际可用需你编辑配置后启动服务。:contentReference[oaicite:1]{index=1}"
-  echo "配置文件通常在：${HY2_CFG} :contentReference[oaicite:2]{index=2}"
-  echo
-
+  echo "将执行官方安装脚本：bash <(curl -fsSL https://get.hy2.sh/)"
   read -r -p "输入 yes 确认继续（回车/0/q 取消）： " ans
   case "${ans:-}" in
     yes) ;;
@@ -315,17 +312,16 @@ install_hy2() {
     *) warn "未输入 yes，已取消。"; return 0 ;;
   esac
 
-  if ! bash <(curl -fsSL "${HY2_INSTALL_URL}"); then
-    warn "安装脚本执行失败：请检查网络/DNS 是否能访问 GitHub Release。"
+  # 安装/升级
+  if ! bash <(curl -fsSL https://get.hy2.sh/); then
+    warn "官方安装脚本执行失败。"
     return 0
   fi
 
-  echo
-  log "HY2 安装/升级完成。"
-  echo "你可以："
-  echo "  1) 编辑配置：nano ${HY2_CFG}"
-  echo "  2) 启动并自启：systemctl enable --now ${HY2_SERVICE}"
+  log "HY2 安装/升级完成，进入配置向导..."
+  hy2_config_wizard
 }
+
 
 uninstall_hy2() {
   need_root
@@ -1698,6 +1694,128 @@ hy2_menu() {
   done
 }
 
+hy2_random_password() {
+  openssl rand -base64 18 | tr -d '\n'
+}
+
+hy2_validate_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1 && "$1" -le 65535 ]]
+}
+
+hy2_open_firewall_hints() {
+  local port="$1"
+  echo
+  warn "HY2 使用 UDP 端口，请确认已放行 UDP ${port}："
+  echo "  - 云厂商安全组/防火墙（如有）"
+  echo "  - 本机防火墙（ufw/iptables/nftables）"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow "${port}/udp" >/dev/null 2>&1 || true
+    log "已尝试通过 UFW 放行 UDP ${port}（如启用 UFW）。"
+  fi
+  echo
+}
+
+hy2_config_wizard() {
+  need_root
+
+  echo
+  echo "=== HY2 配置向导（生成可用服务端配置）==="
+  echo "配置文件：${HY2_CFG}"
+  echo
+
+  # 端口
+  local default_port="443"
+  local port=""
+  read -r -p "监听端口（UDP，默认 ${default_port}，回车/0/q 取消）： " port
+  case "${port:-}" in
+    "" ) port="$default_port" ;;
+    0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;;
+  esac
+  hy2_validate_port "$port" || die "端口不合法：$port"
+
+  echo
+  echo "证书方式："
+  echo "1) ACME 自动申请证书（需要域名解析到本机；通常走 80 端口完成验证）"
+  echo "2) 使用已有证书文件（cert/key 路径）"
+  echo "（回车/0/q 取消）"
+  local mode=""
+  read -r -p "请选择： " mode
+  case "${mode:-}" in
+    ""|0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;;
+  esac
+
+  local auth_pass
+  auth_pass="$(hy2_random_password)"
+
+  # 备份旧配置（如果存在）
+  if [[ -f "$HY2_CFG" ]]; then
+    backup_file "$HY2_CFG"
+  fi
+
+  if [[ "$mode" == "1" ]]; then
+    local domain email
+    read -r -p "请输入域名（例如 hy2.example.com；回车/0/q 取消）： " domain
+    case "${domain:-}" in ""|0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;; esac
+    read -r -p "请输入邮箱（用于 ACME；回车/0/q 取消）： " email
+    case "${email:-}" in ""|0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;; esac
+
+    # 参考官方快速配置模板：listen + acme + auth(password):contentReference[oaicite:1]{index=1}
+    cat >"$HY2_CFG" <<EOF
+listen: :${port}
+
+acme:
+  domains:
+    - ${domain}
+  email: ${email}
+
+auth:
+  type: password
+  password: ${auth_pass}
+EOF
+
+    log "已写入 ACME 配置。注意：ACME 通常需要 80 端口可达用于验证。"
+  elif [[ "$mode" == "2" ]]; then
+    local cert key
+    read -r -p "cert 证书路径（例如 /etc/ssl/fullchain.pem；回车/0/q 取消）： " cert
+    case "${cert:-}" in ""|0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;; esac
+    read -r -p "key 私钥路径（例如 /etc/ssl/privkey.pem；回车/0/q 取消）： " key
+    case "${key:-}" in ""|0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;; esac
+
+    [[ -f "$cert" ]] || warn "证书文件不存在：$cert（如果稍后才放上来也可以，但服务启动会失败）"
+    [[ -f "$key"  ]] || warn "私钥文件不存在：$key（如果稍后才放上来也可以，但服务启动会失败）"
+
+    # 参考官方快速配置模板：listen + tls(cert/key) + auth(password):contentReference[oaicite:2]{index=2}
+    cat >"$HY2_CFG" <<EOF
+listen: :${port}
+
+tls:
+  cert: ${cert}
+  key: ${key}
+
+auth:
+  type: password
+  password: ${auth_pass}
+EOF
+
+    log "已写入自有证书配置。"
+  else
+    warn "无效选择：$mode"
+    return 0
+  fi
+
+  chmod 600 "$HY2_CFG" 2>/dev/null || true
+
+  # 启动并自启
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now "$HY2_SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$HY2_SERVICE" >/dev/null 2>&1 || true
+
+  echo
+  log "HY2 配置完成并已尝试启动服务。"
+  echo "服务密码（请保存）：${auth_pass}"
+  hy2_open_firewall_hints "$port"
+  systemctl --no-pager --full status "$HY2_SERVICE" || true
+}
 
 menu() {
   while true; do
