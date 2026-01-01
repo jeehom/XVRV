@@ -89,7 +89,11 @@ apt_install_deps() {
     return 1
   fi
 
-  apt-get install -y --no-install-recommends curl unzip jq openssl uuid-runtime ca-certificates
+  if ! apt-get install -y --no-install-recommends curl unzip jq openssl uuid-runtime ca-certificates; then
+  warn "依赖安装失败，尝试使用 --fix-missing 重试一次..."
+  apt-get install -y --no-install-recommends --fix-missing curl unzip jq openssl uuid-runtime ca-certificates
+fi
+
 }
 
 
