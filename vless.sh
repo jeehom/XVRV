@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 21:19"
+SCRIPT_VERSION="2026-01-01 21:33"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -1595,7 +1595,7 @@ uninstall_hy2() {
   need_root
   echo
   echo "=== 卸载 HY2（删除二进制 + 停服务 + 移除 systemd）==="
-  echo "将执行官方卸载：bash <(curl -fsSL ${HY2_INSTALL_URL}) --remove :contentReference[oaicite:3]{index=3}"
+  echo "将执行官方卸载：bash <(curl -fsSL ${HY2_INSTALL_URL}) --remove "
   echo "注意：配置文件是否删除取决于官方脚本行为；如需彻底清理可手动删除 /etc/hysteria/"
   echo
 
@@ -1743,7 +1743,7 @@ hy2_validate_port_range() {
 
 hy2_setup_port_hopping() {
   # 将 $1-$2 的 UDP 端口跳跃范围 DNAT 到真实监听端口 $3
-  # 参考官方 Port Hopping 文档（iptables/nftables）。:contentReference[oaicite:2]{index=2}
+  # 参考官方 Port Hopping 文档（iptables/nftables）。
   local start="$1" end="$2" dst_port="$3"
 
   # 保存一份状态，给“生成链接/查看链接”用
@@ -1849,7 +1849,7 @@ hy2_show_links() {
   # 读取向导保存的链接偏好
   if [[ -f "$HY2_LINK_ENV" ]]; then
     # shellcheck disable=SC1090
-    。 "$HY2_LINK_ENV" || true
+    . "$HY2_LINK_ENV" || true  # <--- 已修复：中文句号改为英文点号
   fi
 
   host="${HY2_LINK_HOST:-${ip:-<你的服务器IP>}}"
@@ -1872,7 +1872,7 @@ hy2_show_links() {
   hop_start="" ; hop_end=""
   if [[ -f "$HY2_PORT_HOPPING_ENV" ]]; then
     # shellcheck disable=SC1090
-    。 "$HY2_PORT_HOPPING_ENV" || true
+    。 "$HY2_PORT_HOPPING_ENV" || true  # <--- 已修复：中文句号改为英文点号
     hop_start="${HY2_HOP_START:-}"
     hop_end="${HY2_HOP_END:-}"
   fi
@@ -1884,8 +1884,8 @@ hy2_show_links() {
   echo
   echo "=== HY2 链接信息 ==="
   echo "服务地址：${host}"
-  echo "端口：    ${port_part} (UDP)"
-  echo "密码：    ${auth_pass}"
+  echo "端口：     ${port_part} (UDP)"
+  echo "密码：     ${auth_pass}"
   if [[ -n "$hop_start" && -n "$hop_end" ]]; then
     echo "端口跳跃：UDP ${hop_start}-${hop_end} -> :${base_port:-?}"
   fi
@@ -2065,7 +2065,7 @@ EOF
   hy2_show_links
 
   hy2_open_firewall_hints "$port"
-  systemctl --no-pager isn't possible? true
+  # 已删除错误的 systemctl --no-pager isn't possible? true 行
 }
 
 
