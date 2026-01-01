@@ -5,7 +5,7 @@ set -euo pipefail
 # Xray VLESS + REALITY + Vision 管理脚本（Debian/Ubuntu）
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 10:34"
+SCRIPT_VERSION="2026-01-01 10:39"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -1299,9 +1299,7 @@ get_remote_script_version() {
 
 auto_check_self_update() {
   [[ "${AUTO_CHECK_UPDATES}" == "1" ]] || return 0
-  [[ -t 0 ]] || return 0   # 非交互不提示
-
-  # 没有 curl 或 SELF_URL 为空就跳过
+  [[ -t 0 ]] || return 0
   command -v curl >/dev/null 2>&1 || return 0
   [[ -n "${SELF_URL:-}" ]] || return 0
 
@@ -1309,17 +1307,19 @@ auto_check_self_update() {
   remote_ver="$(get_remote_script_version || true)"
   [[ -n "$remote_ver" ]] || return 0
 
-  if [[ "${SCRIPT_VERSION}" != "$remote_ver" ]]; then
+  if [[ "${SCRIPT_VERSION:-unknown}" != "$remote_ver" ]]; then
     echo
     echo "[!] 检测到脚本有新版本："
-    echo "    本地：${SCRIPT_VERSION}"
+    echo "    本地：${SCRIPT_VERSION:-unknown}"
     echo "    远端：${remote_ver}"
     read -r -p "是否现在更新脚本？输入 YES 更新（回车跳过）： " ans
     if [[ "${ans:-}" == "YES" ]]; then
-      update_self
+      # 关键：告诉 update_self 这是“自动更新模式”，不要二次确认，并自动重启
+      UPDATE_SELF_MODE="auto" update_self
     fi
   fi
 }
+
 auto_check_xray_update() {
   [[ "${AUTO_CHECK_UPDATES}" == "1" ]] || return 0
   [[ -t 0 ]] || return 0   # 非交互不提示
@@ -1359,6 +1359,7 @@ update_self() {
   local cur="${0}"
   local target=""
   local local_ver="${SCRIPT_VERSION:-unknown}"
+  local mode="${UPDATE_SELF_MODE:-manual}"   # manual=菜单手动更新；auto=启动自动更新
 
   echo
   echo "=== 更新脚本 ==="
@@ -1386,7 +1387,6 @@ update_self() {
     return 0
   fi
 
-  # 简单自检：避免下载到 HTML/错误页
   if ! head -n 1 "$tmp" | grep -qE '^#!/usr/bin/env bash'; then
     warn "下载内容疑似不是脚本（首行不是 shebang）。已取消写入。"
     echo "前几行内容如下："
@@ -1394,20 +1394,14 @@ update_self() {
     return 0
   fi
 
-  # 解析远端脚本版本（只取第一个匹配）
   remote_ver="$(awk -F'"' '/^SCRIPT_VERSION="/ {print $2; exit}' "$tmp" | tr -d '\r' || true)"
   [[ -n "$remote_ver" ]] || remote_ver="unknown"
 
-  echo
   echo "远端脚本版本：${remote_ver}"
-  if [[ "$remote_ver" != "unknown" && "$local_ver" != "unknown" && "$remote_ver" == "$local_ver" ]]; then
-    log "本地已是远端同版本（${local_ver}），无需更新。"
-    read -r -p "仍要强制覆盖更新吗？输入 YES 继续（回车取消）： " force
-    if [[ "${force:-}" != "YES" ]]; then
-      log "已取消更新脚本。"
-      return 0
-    fi
-  else
+
+  # 手动更新才需要二次确认；自动更新模式直接继续
+  if [[ "$mode" == "manual" ]]; then
+    echo
     read -r -p "输入 YES 确认更新（回车/0/q 取消）： " ans
     case "${ans:-}" in
       YES) ;;
@@ -1422,7 +1416,6 @@ update_self() {
     esac
   fi
 
-  # 备份旧文件（如果存在）
   if [[ -f "$target" ]]; then
     bak="${target}.bak-${ts}"
     cp -a "$target" "$bak" || true
@@ -1437,15 +1430,18 @@ update_self() {
   echo "  原版本：${local_ver}"
   echo "  新版本：${remote_ver}"
   echo
-  echo "下次运行你可以直接用："
-  echo "  sudo -i ${target}"
-  echo
 
-  read -r -p "是否立即用新版本重新启动脚本？输入 YES 立即重启（回车跳过）： " r
-  if [[ "${r:-}" == "YES" ]]; then
+  # 自动更新模式：默认自动重启；手动模式保留提示（但不再要求 YES）
+  if [[ "$mode" == "auto" ]]; then
     exec "$target"
+  else
+    read -r -p "是否立即用新版本重新启动脚本？回车跳过，输入 r 立即重启： " r
+    if [[ "${r:-}" == "r" || "${r:-}" == "R" ]]; then
+      exec "$target"
+    fi
   fi
 }
+
 
 
 menu() {
