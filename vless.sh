@@ -1287,6 +1287,71 @@ service_menu() {
   done
 }
 
+get_remote_script_version() {
+  # 从远端脚本里提取 SCRIPT_VERSION="..."
+  # 只抓前 120 行，速度快，也不容易被大文件影响
+  curl -fsSL --max-time 8 "$SELF_URL" 2>/dev/null \
+    | head -n 120 \
+    | awk -F'"' '/^SCRIPT_VERSION="/ {print $2; exit}' \
+    | tr -d '\r' \
+    || true
+}
+
+auto_check_self_update() {
+  [[ "${AUTO_CHECK_UPDATES}" == "1" ]] || return 0
+  [[ -t 0 ]] || return 0   # 非交互不提示
+
+  # 没有 curl 或 SELF_URL 为空就跳过
+  command -v curl >/dev/null 2>&1 || return 0
+  [[ -n "${SELF_URL:-}" ]] || return 0
+
+  local remote_ver
+  remote_ver="$(get_remote_script_version || true)"
+  [[ -n "$remote_ver" ]] || return 0
+
+  if [[ "${SCRIPT_VERSION}" != "$remote_ver" ]]; then
+    echo
+    echo "[!] 检测到脚本有新版本："
+    echo "    本地：${SCRIPT_VERSION}"
+    echo "    远端：${remote_ver}"
+    read -r -p "是否现在更新脚本？输入 YES 更新（回车跳过）： " ans
+    if [[ "${ans:-}" == "YES" ]]; then
+      update_self
+    fi
+  fi
+}
+auto_check_xray_update() {
+  [[ "${AUTO_CHECK_UPDATES}" == "1" ]] || return 0
+  [[ -t 0 ]] || return 0   # 非交互不提示
+  [[ -x "${XRAY_BIN}" ]] || return 0
+
+  # fetch_latest_tag 你已经有“稳健版”（API+redirect），这里直接用即可
+  local latest_tag installed_ver latest_ver
+  latest_tag="$(fetch_latest_tag || true)"
+  [[ -n "$latest_tag" ]] || return 0
+
+  installed_ver="$(get_installed_tag || true)"
+  latest_ver="${latest_tag#v}"
+
+  [[ -n "$installed_ver" ]] || return 0
+
+  # 避免降级：installed >= latest 就不提示
+  local newest
+  newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
+  if [[ "$newest" == "$installed_ver" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "[!] 检测到 Xray 可更新："
+  echo "    当前：${installed_ver}"
+  echo "    最新：${latest_ver}"
+  read -r -p "是否现在更新 Xray？输入 YES 更新（回车跳过）： " ans
+  if [[ "${ans:-}" == "YES" ]]; then
+    update_xray
+  fi
+}
+
 update_self() {
   # 需要写 /usr/local/bin，最好要求 root
   need_root
@@ -1441,7 +1506,11 @@ EOF
 main() {
   local cmd="${1:-}"
   case "$cmd" in
-    "" ) menu ;;
+    "")
+      auto_check_self_update
+      auto_check_xray_update
+      menu
+      ;;
     help|-h|--help) usage ;;
     install) install_xray ;;
     uninstall) uninstall_xray ;;
@@ -1458,5 +1527,6 @@ main() {
     *) warn "未知命令：$cmd"; usage; exit 1 ;;
   esac
 }
+
 
 main "$@"
