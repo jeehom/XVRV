@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 19:50"
+SCRIPT_VERSION="2026-01-01 19:56"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -251,148 +251,6 @@ download_xray() {
   if [[ -f "${tmpdir}/geosite.dat" ]]; then
     install -m 0644 "${tmpdir}/geosite.dat" /usr/local/share/xray/geosite.dat
   fi
-}
-
-hy2_bin_path() {
-  local p
-  for p in "${HY2_BIN_CANDIDATES[@]}"; do
-    [[ -n "${p:-}" && -x "$p" ]] && { echo "$p"; return 0; }
-  done
-  echo ""
-  return 1
-}
-
-hy2_installed_ver() {
-  local bin
-  bin="$(hy2_bin_path || true)"
-  [[ -n "$bin" ]] || { echo ""; return 0; }
-
-  # 尽量兼容不同输出
-  local out
-  out="$("$bin" version 2>/dev/null | head -n 1 || true)"
-  if [[ -z "$out" ]]; then
-    out="$("$bin" --version 2>/dev/null | head -n 1 || true)"
-  fi
-
-  # 提取类似 2.6.5 / v2.6.5
-  echo "$out" | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | sed 's/^v//'
-}
-
-hy2_fetch_latest_tag() {
-  local tag=""
-  tag="$(curl -fsSL --max-time 8 "https://api.github.com/repos/${HY2_REPO}/releases/latest" 2>/dev/null \
-        | jq -r '.tag_name // empty' 2>/dev/null || true)"
-  if [[ -n "$tag" && "$tag" == v* ]]; then
-    echo "$tag"; return 0
-  fi
-
-  # fallback: parse redirect
-  local loc
-  loc="$(curl -fsSIL --max-time 8 "https://github.com/${HY2_REPO}/releases/latest" 2>/dev/null \
-        | awk -F': ' 'BEGIN{IGNORECASE=1} /^location:/ {print $2}' \
-        | tr -d '\r' | tail -n 1 || true)"
-  if [[ "$loc" == *"/tag/v"* ]]; then
-    tag="${loc##*/tag/}"
-  fi
-  [[ -n "$tag" && "$tag" == v* ]] && { echo "$tag"; return 0; }
-
-  echo ""
-  return 1
-}
-
-install_or_upgrade_hy2() {
-  need_root
-  echo
-  echo "=== 安装/升级 HY2（Hysteria 2）==="
-  echo "将执行官方安装脚本：bash <(curl -fsSL https://get.hy2.sh/)"
-  read -r -p "输入 yes 确认继续（回车/0/q 取消）： " ans
-  case "${ans:-}" in
-    yes) ;;
-    ""|0|q|Q) log "已取消。"; return 0 ;;
-    *) warn "未输入 yes，已取消。"; return 0 ;;
-  esac
-
-  # 安装/升级
-  if ! bash <(curl -fsSL https://get.hy2.sh/); then
-    warn "官方安装脚本执行失败。"
-    return 0
-  fi
-
-  log "HY2 安装/升级完成，进入配置向导..."
-  hy2_config_wizard
-}
-
-
-uninstall_hy2() {
-  need_root
-  echo
-  echo "=== 卸载 HY2（删除二进制 + 停服务 + 移除 systemd）==="
-  echo "将执行官方卸载：bash <(curl -fsSL ${HY2_INSTALL_URL}) --remove :contentReference[oaicite:3]{index=3}"
-  echo "注意：配置文件是否删除取决于官方脚本行为；如需彻底清理可手动删除 /etc/hysteria/"
-  echo
-
-  read -r -p "输入 yes 确认卸载（回车/0/q 取消）： " ans
-  case "${ans:-}" in
-    yes) ;;
-    ""|0|q|Q) log "已取消卸载。"; return 0 ;;
-    *) warn "未输入 yes，已取消。"; return 0 ;;
-  esac
-
-  bash <(curl -fsSL "${HY2_INSTALL_URL}") --remove || true
-  log "已执行卸载流程。"
-}
-
-hy2_status()  { systemctl --no-pager --full status "${HY2_SERVICE}" || true; }
-hy2_start()   { need_root; systemctl start  "${HY2_SERVICE}" || true; log "已启动 HY2 服务。"; }
-hy2_stop()    { need_root; systemctl stop   "${HY2_SERVICE}" || true; log "已停止 HY2 服务。"; }
-hy2_restart() { need_root; systemctl restart "${HY2_SERVICE}" || true; log "已重启 HY2 服务。"; }
-hy2_logs()    { journalctl -u "${HY2_SERVICE}" -e --no-pager || true; }
-
-update_hy2() {
-  need_root
-  echo
-  echo "=== 检测/更新 HY2（Hysteria 2）==="
-
-  local bin installed_ver latest_tag latest_ver
-  installed_ver="$(hy2_installed_ver || true)"
-  latest_tag="$(hy2_fetch_latest_tag || true)"
-  latest_ver="${latest_tag#v}"
-
-  echo "当前版本：${installed_ver:-unknown}"
-  echo "最新版本：${latest_ver:-unknown}"
-  echo
-
-  if [[ -z "$latest_tag" ]]; then
-    warn "获取最新版本失败：可能网络无法访问 GitHub 或被限流。"
-    return 0
-  fi
-
-  # 如果本地版本可读且 >= 最新版本 -> 不更新
-  if [[ -n "$installed_ver" ]]; then
-    local newest
-    newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
-    if [[ "$newest" == "$installed_ver" ]]; then
-      log "当前已是最新或更高版本，无需更新。"
-      return 0
-    fi
-  fi
-
-  read -r -p "发现新版本，是否更新到 ${latest_ver}？输入 yes 更新（回车/0/q 取消）： " ans
-  case "${ans:-}" in
-    yes) ;;
-    ""|0|q|Q) log "已取消更新。"; return 0 ;;
-    *) warn "未输入 yes，已取消。"; return 0 ;;
-  esac
-
-  # 官方脚本“安装或升级到最新版本”就是再跑一次
-  if ! bash <(curl -fsSL "${HY2_INSTALL_URL}"); then
-    warn "更新失败：请检查网络是否能访问 GitHub Release。"
-    return 0
-  fi
-
-  # 尝试重启服务（存在则重启）
-  systemctl list-unit-files | grep -q "^${HY2_SERVICE}" && systemctl restart "${HY2_SERVICE}" || true
-  log "HY2 已更新完成。"
 }
 
 
@@ -1500,12 +1358,12 @@ auto_check_self_update() {
   remote_ts="$(date -d "$remote_ver" +%s 2>/dev/null || echo 0)"
 
   # 如果解析失败（=0），就退化为“不提示”，避免误报
-  if [[ "$local_ts" -le 0 || "$remote_ts" -le 0 ]]; then
+  if [[ "$local_ts" -le 0 || "$remote_ts" -le 0 ]]; 键，然后
     return 0
   fi
 
   # 远端不比本地新：不提示（包括远端更旧的情况）
-  if [[ "$remote_ts" -le "$local_ts" ]]; then
+  if [[ "$remote_ts" -le "$local_ts" ]]; 键，然后
     return 0
   fi
 
@@ -1514,7 +1372,7 @@ auto_check_self_update() {
   echo "    本地：${local_ver}"
   echo "    远端：${remote_ver}"
   read -r -p "是否现在更新脚本？输入 yes 更新（回车跳过）： " ans
-  if [[ "${ans:-}" == "yes" ]]; then
+  if [[ "${ans:-}" == "yes" ]]; 键，然后
     UPDATE_SELF_MODE="auto" update_self
   fi
 }
@@ -1538,7 +1396,7 @@ auto_check_xray_update() {
   # 避免降级：installed >= latest 就不提示
   local newest
   newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
-  if [[ "$newest" == "$installed_ver" ]]; then
+  if [[ "$newest" == "$installed_ver" ]]; 键，然后
     return 0
   fi
 
@@ -1547,7 +1405,7 @@ auto_check_xray_update() {
   echo "    当前：${installed_ver}"
   echo "    最新：${latest_ver}"
   read -r -p "是否现在更新 Xray？输入 yes 更新（回车跳过）： " ans
-  if [[ "${ans:-}" == "yes" ]]; then
+  if [[ "${ans:-}" == "yes" ]]; 键，然后
     update_xray
   fi
 }
@@ -1568,7 +1426,7 @@ update_self() {
   echo "本地脚本版本：${local_ver}"
 
   target="${SELF_INSTALL_PATH_DEFAULT}"
-  if [[ "$(readlink -f "$cur" 2>/dev/null || echo "$cur")" == "$target" ]]; then
+  if [[ "$(readlink -f "$cur" 2>/dev/null || echo "$cur")" == "$target" ]]; 键，然后
     target="$cur"
   fi
   echo "将更新到：${target}"
@@ -1648,6 +1506,149 @@ update_self() {
   return 0
 }
 
+# ================ hy2 管理==========================================
+
+hy2_bin_path() {
+  local p
+  for p in "${HY2_BIN_CANDIDATES[@]}"; do
+    [[ -n "${p:-}" && -x "$p" ]] && { echo "$p"; return 0; }
+  done
+  echo ""
+  return 1
+}
+
+hy2_installed_ver() {
+  local bin
+  bin="$(hy2_bin_path || true)"
+  [[ -n "$bin" ]] || { echo ""; return 0; }
+
+  # 尽量兼容不同输出
+  local out
+  out="$("$bin" version 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$out" ]]; then
+    out="$("$bin" --version 2>/dev/null | head -n 1 || true)"
+  fi
+
+  # 提取类似 2.6.5 / v2.6.5
+  echo "$out" | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | sed 's/^v//'
+}
+
+hy2_fetch_latest_tag() {
+  local tag=""
+  tag="$(curl -fsSL --max-time 8 "https://api.github.com/repos/${HY2_REPO}/releases/latest" 2>/dev/null \
+        | jq -r '.tag_name // empty' 2>/dev/null || true)"
+  if [[ -n "$tag" && "$tag" == v* ]]; then
+    echo "$tag"; return 0
+  fi
+
+  # fallback: parse redirect
+  local loc
+  loc="$(curl -fsSIL --max-time 8 "https://github.com/${HY2_REPO}/releases/latest" 2>/dev/null \
+        | awk -F': ' 'BEGIN{IGNORECASE=1} /^location:/ {print $2}' \
+        | tr -d '\r' | tail -n 1 || true)"
+  if [[ "$loc" == *"/tag/v"* ]]; then
+    tag="${loc##*/tag/}"
+  fi
+  [[ -n "$tag" && "$tag" == v* ]] && { echo "$tag"; return 0; }
+
+  echo ""
+  return 1
+}
+
+install_or_upgrade_hy2() {
+  need_root
+  echo
+  echo "=== 安装/升级 HY2（Hysteria 2）==="
+  echo "将执行官方安装脚本：bash <(curl -fsSL https://get.hy2.sh/)"
+  read -r -p "输入 yes 确认继续（回车/0/q 取消）： " ans
+  case "${ans:-}" in
+    yes) ;;
+    ""|0|q|Q) log "已取消。"; return 0 ;;
+    *) warn "未输入 yes，已取消。"; return 0 ;;
+  esac
+
+  # 安装/升级
+  if ! bash <(curl -fsSL https://get.hy2.sh/); then
+    warn "官方安装脚本执行失败。"
+    return 0
+  fi
+
+  log "HY2 安装/升级完成，进入配置向导..."
+  hy2_config_wizard
+}
+
+
+uninstall_hy2() {
+  need_root
+  echo
+  echo "=== 卸载 HY2（删除二进制 + 停服务 + 移除 systemd）==="
+  echo "将执行官方卸载：bash <(curl -fsSL ${HY2_INSTALL_URL}) --remove :contentReference[oaicite:3]{index=3}"
+  echo "注意：配置文件是否删除取决于官方脚本行为；如需彻底清理可手动删除 /etc/hysteria/"
+  echo
+
+  read -r -p "输入 yes 确认卸载（回车/0/q 取消）： " ans
+  case "${ans:-}" in
+    yes) ;;
+    ""|0|q|Q) log "已取消卸载。"; return 0 ;;
+    *) warn "未输入 yes，已取消。"; return 0 ;;
+  esac
+
+  bash <(curl -fsSL "${HY2_INSTALL_URL}") --remove || true
+  log "已执行卸载流程。"
+}
+
+hy2_status()  { systemctl --no-pager --full status "${HY2_SERVICE}" || true; }
+hy2_start()   { need_root; systemctl start  "${HY2_SERVICE}" || true; log "已启动 HY2 服务。"; }
+hy2_stop()    { need_root; systemctl stop   "${HY2_SERVICE}" || true; log "已停止 HY2 服务。"; }
+hy2_restart() { need_root; systemctl restart "${HY2_SERVICE}" || true; log "已重启 HY2 服务。"; }
+hy2_logs()    { journalctl -u "${HY2_SERVICE}" -e --no-pager || true; }
+
+update_hy2() {
+  need_root
+  echo
+  echo "=== 检测/更新 HY2（Hysteria 2）==="
+
+  local bin installed_ver latest_tag latest_ver
+  installed_ver="$(hy2_installed_ver || true)"
+  latest_tag="$(hy2_fetch_latest_tag || true)"
+  latest_ver="${latest_tag#v}"
+
+  echo "当前版本：${installed_ver:-unknown}"
+  echo "最新版本：${latest_ver:-unknown}"
+  echo
+
+  if [[ -z "$latest_tag" ]]; then
+    warn "获取最新版本失败：可能网络无法访问 GitHub 或被限流。"
+    return 0
+  fi
+
+  # 如果本地版本可读且 >= 最新版本 -> 不更新
+  if [[ -n "$installed_ver" ]]; then
+    local newest
+    newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
+    if [[ "$newest" == "$installed_ver" ]]; then
+      log "当前已是最新或更高版本，无需更新。"
+      return 0
+    fi
+  fi
+
+  read -r -p "发现新版本，是否更新到 ${latest_ver}？输入 yes 更新（回车/0/q 取消）： " ans
+  case "${ans:-}" in
+    yes) ;;
+    ""|0|q|Q) log "已取消更新。"; return 0 ;;
+    *) warn "未输入 yes，已取消。"; return 0 ;;
+  esac
+
+  # 官方脚本“安装或升级到最新版本”就是再跑一次
+  if ! bash <(curl -fsSL "${HY2_INSTALL_URL}"); then
+    warn "更新失败：请检查网络是否能访问 GitHub Release。"
+    return 0
+  fi
+
+  # 尝试重启服务（存在则重启）
+  systemctl list-unit-files | grep -q "^${HY2_SERVICE}" && systemctl restart "${HY2_SERVICE}" || true
+  log "HY2 已更新完成。"
+}
 
 hy2_random_password() {
   openssl rand -base64 18 | tr -d '\n'
@@ -1808,7 +1809,7 @@ hy2_menu() {
     echo "========================================================"
     read -r -p "请选择操作编号： " c
     case "$c" in
-      1) install_hy2;     pause_or_exit ;;
+      1) install_or_upgrade_hy2;     pause_or_exit ;;
       2) uninstall_hy2;   pause_or_exit ;;
       3) hy2_service_menu ;;
       4) update_hy2;      pause_or_exit ;;
@@ -1817,6 +1818,7 @@ hy2_menu() {
     esac
   done
 }
+
 menu() {
   while true; do
     echo
