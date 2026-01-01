@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 20:17"
+SCRIPT_VERSION="2026-01-01 20:40"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -58,6 +58,8 @@ HY2_INSTALL_URL="${HY2_INSTALL_URL:-https://get.hy2.sh/}"
 HY2_REPO="${HY2_REPO:-apernet/hysteria}"
 HY2_SERVICE="hysteria-server.service"
 HY2_CFG="/etc/hysteria/config.yaml"
+HY2_LINK_ENV="/etc/hysteria/link.env"              # 保存“生成链接需要的信息”
+HY2_PORT_HOPPING_ENV="/etc/hysteria/port_hopping.env"  # 保存端口跳跃范围
 
 # 常见安装后二进制名（官方脚本通常装为 hysteria）
 HY2_BIN_CANDIDATES=(
@@ -1682,6 +1684,177 @@ hy2_open_firewall_hints() {
   echo
 }
 
+hy2_random_password() {
+  # 用 hex 避免 URI 里还要做 percent-encode（base64 可能有 + / =）
+  openssl rand -hex 16
+}
+
+hy2_parse_listen_port() {
+  # 从 /etc/hysteria/config.yaml 里抓 listen: :443 / 0.0.0.0:443
+  [[ -f "$HY2_CFG" ]] || { echo ""; return 0; }
+  local v
+  v="$(awk -F': *' '/^[[:space:]]*listen:[[:space:]]*/ {print $2; exit}' "$HY2_CFG" | tr -d '\r' || true)"
+  [[ -n "$v" ]] || { echo ""; return 0; }
+  echo "${v##*:}"
+}
+
+hy2_read_password_from_cfg() {
+  [[ -f "$HY2_CFG" ]] || { echo ""; return 0; }
+  awk '
+    BEGIN{in_auth=0}
+    /^[[:space:]]*auth:/ {in_auth=1; next}
+    in_auth && /^[[:space:]]*[a-zA-Z0-9_-]+:/ && $1!="password:" {next}
+    in_auth && /^[[:space:]]*password:/ {print $2; exit}
+  ' "$HY2_CFG" | tr -d '\r' || true
+}
+
+hy2_read_acme_domain_from_cfg() {
+  [[ -f "$HY2_CFG" ]] || { echo ""; return 0; }
+  awk '
+    BEGIN{in_acme=0; in_domains=0}
+    /^[[:space:]]*acme:/ {in_acme=1; next}
+    in_acme && /^[[:space:]]*domains:/ {in_domains=1; next}
+    in_domains && /^[[:space:]]*-[[:space:]]*/ {sub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit}
+  ' "$HY2_CFG" | tr -d '\r' || true
+}
+
+hy2_validate_port_range() {
+  # $1=start $2=end
+  local s="$1" e="$2"
+  [[ "$s" =~ ^[0-9]+$ ]] && [[ "$e" =~ ^[0-9]+$ ]] || return 1
+  [[ "$s" -ge 1 && "$s" -le 65535 ]] || return 1
+  [[ "$e" -ge 1 && "$e" -le 65535 ]] || return 1
+  [[ "$e" -ge "$s" ]] || return 1
+  return 0
+}
+
+hy2_setup_port_hopping() {
+  # 将 $1-$2 的 UDP 端口跳跃范围 DNAT 到真实监听端口 $3
+  # 参考官方 Port Hopping 文档（iptables/nftables）。:contentReference[oaicite:2]{index=2}
+  local start="$1" end="$2" dst_port="$3"
+
+  # 保存一份状态，给“生成链接/查看链接”用
+  mkdir -p /etc/hysteria || true
+  cat >"$HY2_PORT_HOPPING_ENV" <<EOF
+HY2_HOP_START=${start}
+HY2_HOP_END=${end}
+EOF
+  chmod 600 "$HY2_PORT_HOPPING_ENV" 2>/dev/null || true
+
+  # 优先 nftables（现代 Debian/Ubuntu 多为 nft 后端）
+  if command -v nft >/dev/null 2>&1; then
+    # 为了幂等，直接删了重建我们自己的表（不碰系统其它表）
+    nft delete table inet hy2_port_hopping >/dev/null 2>&1 || true
+    nft -f - >/dev/null 2>&1 <<EOF
+table inet hy2_port_hopping {
+  chain prerouting {
+    type nat hook prerouting priority 100; policy accept;
+    udp dport ${start}-${end} dnat to :${dst_port};
+  }
+  chain output {
+    type nat hook output priority 100; policy accept;
+    udp dport ${start}-${end} dnat to :${dst_port};
+  }
+}
+EOF
+    log "已设置端口跳跃（nftables）：UDP ${start}-${end} -> :${dst_port}"
+    warn "注意：nft 规则是否“重启后保留”取决于系统是否加载 /etc/nftables.conf。需要持久化的话我可以再帮你加。"
+    return 0
+  fi
+
+  # fallback：iptables
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -t nat -C PREROUTING -p udp --dport "${start}:${end}" -j DNAT --to-destination ":${dst_port}" >/dev/null 2>&1 \
+      || iptables -t nat -A PREROUTING -p udp --dport "${start}:${end}" -j DNAT --to-destination ":${dst_port}"
+
+    iptables -t nat -C OUTPUT -p udp --dport "${start}:${end}" -j DNAT --to-destination ":${dst_port}" >/dev/null 2>&1 \
+      || iptables -t nat -A OUTPUT -p udp --dport "${start}:${end}" -j DNAT --to-destination ":${dst_port}"
+
+    log "已设置端口跳跃（iptables）：UDP ${start}-${end} -> :${dst_port}"
+    warn "注意：iptables 规则默认不持久化（重启会丢）。如需持久化可安装 iptables-persistent。"
+    return 0
+  fi
+
+  warn "未检测到 nft/iptables，无法设置端口跳跃。"
+  return 0
+}
+
+hy2_open_firewall_hints_range() {
+  local start="$1" end="$2"
+  echo
+  warn "端口跳跃范围需要放行 UDP ${start}-${end}："
+  if command -v ufw >/dev/null 2>&1; then
+    # UFW 支持范围写法 start:end
+    ufw allow "${start}:${end}/udp" >/dev/null 2>&1 || true
+    log "已尝试通过 UFW 放行 UDP ${start}-${end}（如启用 UFW）。"
+  fi
+  echo
+}
+
+hy2_save_link_env() {
+  # $1=host $2=sni $3=insecure(0/1)
+  mkdir -p /etc/hysteria || true
+  cat >"$HY2_LINK_ENV" <<EOF
+HY2_LINK_HOST=$1
+HY2_LINK_SNI=$2
+HY2_LINK_INSECURE=$3
+EOF
+  chmod 600 "$HY2_LINK_ENV" 2>/dev/null || true
+}
+
+hy2_show_links() {
+  need_root
+  [[ -f "$HY2_CFG" ]] || { warn "未找到配置：$HY2_CFG（请先安装并完成配置向导）"; return 0; }
+
+  local ip host sni insecure listen_port auth_pass port_part hop_start hop_end
+  ip="$(get_server_ip)"
+  listen_port="$(hy2_parse_listen_port)"
+  auth_pass="$(hy2_read_password_from_cfg)"
+  [[ -n "$listen_port" ]] || listen_port="443"
+  [[ -n "$auth_pass" ]] || auth_pass="<请检查 ${HY2_CFG} 的 auth.password>"
+
+  # 读取保存的链接偏好
+  if [[ -f "$HY2_LINK_ENV" ]]; then
+    # shellcheck disable=SC1090
+    . "$HY2_LINK_ENV" || true
+  fi
+  host="${HY2_LINK_HOST:-${ip:-<你的服务器IP>}}"
+  sni="${HY2_LINK_SNI:-}"
+  insecure="${HY2_LINK_INSECURE:-0}"
+
+  # 端口跳跃范围（如果启用）
+  hop_start="" ; hop_end=""
+  if [[ -f "$HY2_PORT_HOPPING_ENV" ]]; then
+    # shellcheck disable=SC1090
+    . "$HY2_PORT_HOPPING_ENV" || true
+    hop_start="${HY2_HOP_START:-}"
+    hop_end="${HY2_HOP_END:-}"
+  fi
+
+  port_part="$listen_port"
+  if [[ -n "$hop_start" && -n "$hop_end" ]]; then
+    # URI 支持 multi-port：:123,5000-6000 :contentReference[oaicite:3]{index=3}
+    port_part="${listen_port},${hop_start}-${hop_end}"
+  fi
+
+  local qs=""
+  [[ -n "$sni" ]] && qs="${qs}sni=${sni}&"
+  qs="${qs}insecure=${insecure}"
+
+  echo
+  echo "=== HY2 链接信息 ==="
+  echo "服务地址：${host}"
+  echo "端口：    ${port_part} (UDP)"
+  echo "密码：    ${auth_pass}"
+  if [[ -n "$hop_start" && -n "$hop_end" ]]; then
+    echo "端口跳跃：UDP ${hop_start}-${hop_end} -> :${listen_port}"
+  fi
+  echo
+  echo "分享链接（hy2 URI）："
+  echo "hy2://${auth_pass}@${host}:${port_part}/?${qs}"
+  echo
+}
+
 hy2_config_wizard() {
   need_root
 
@@ -1699,6 +1872,25 @@ hy2_config_wizard() {
     0|q|Q) log "已取消，未修改 HY2 配置。"; return 0 ;;
   esac
   hy2_validate_port "$port" || die "端口不合法：$port"
+  # 端口跳跃（Port Hopping）：用 DNAT 把一段 UDP 端口范围转发到真实监听端口 :contentReference[oaicite:4]{index=4}
+  local hop_enable=""
+  local hop_range=""
+  local hop_start="" hop_end=""
+  read -r -p "是否启用端口跳跃（Port Hopping）？输入 yes 启用（回车跳过）： " hop_enable
+  if [[ "${hop_enable:-}" == "yes" ]]; then
+    read -r -p "请输入跳跃端口范围（例如 5000-6000；回车/0/q 取消）： " hop_range
+    case "${hop_range:-}" in
+      ""|0|q|Q) log "已取消端口跳跃设置。"; hop_enable="";;
+      *)
+        hop_start="${hop_range%%-*}"
+        hop_end="${hop_range##*-}"
+        hy2_validate_port_range "$hop_start" "$hop_end" || die "端口范围不合法：$hop_range"
+        hy2_setup_port_hopping "$hop_start" "$hop_end" "$port"
+        hy2_open_firewall_hints_range "$hop_start" "$hop_end"
+        ;;
+    esac
+  fi
+
 
   echo
   echo "证书方式："
@@ -1741,6 +1933,9 @@ auth:
 EOF
 
     log "已写入 ACME 配置。注意：ACME 通常需要 80 端口可达用于验证。"
+    # ACME：通常用域名连接，证书校验正常（insecure=0）
+    hy2_save_link_env "${domain}" "${domain}" "0"
+
   elif [[ "$mode" == "2" ]]; then
     local cert key
     read -r -p "cert 证书路径（例如 /etc/ssl/fullchain.pem；回车/0/q 取消）： " cert
@@ -1765,6 +1960,15 @@ auth:
 EOF
 
     log "已写入自有证书配置。"
+    local link_host link_sni link_insecure
+    read -r -p "生成分享链接时使用的域名/地址（默认：服务器公网IP；回车使用默认）： " link_host
+    read -r -p "客户端 SNI（可留空；如果用域名证书建议填域名）： " link_sni
+    read -r -p "是否需要 insecure=1（IP直连/自签常用）？输入 yes 启用（默认 0）： " link_insecure
+
+    [[ -n "$link_host" ]] || link_host="$(get_server_ip)"
+    [[ "${link_insecure:-}" == "yes" ]] && link_insecure="1" || link_insecure="0"
+    hy2_save_link_env "${link_host}" "${link_sni}" "${link_insecure}"
+
   else
     warn "无效选择：$mode"
     return 0
@@ -1780,6 +1984,8 @@ EOF
   echo
   log "HY2 配置完成并已尝试启动服务。"
   echo "服务密码（请保存）：${auth_pass}"
+  hy2_show_links
+
   hy2_open_firewall_hints "$port"
   systemctl --no-pager --full status "$HY2_SERVICE" || true
 }
@@ -1816,6 +2022,7 @@ hy2_menu() {
     echo "2) 卸载 HY2（删二进制/删服务/停服务）"
     echo "3) 服务管理（状态/启动/停止/重启/日志）"
     echo "4) 检测/更新 HY2（类似 update_xray）"
+    echo "5) 查看链接（hy2:// URI）"
     echo "0) 返回主菜单"
     echo "========================================================"
     read -r -p "请选择操作编号： " c
@@ -1824,6 +2031,7 @@ hy2_menu() {
       2) uninstall_hy2;   pause_or_exit ;;
       3) hy2_service_menu ;;
       4) update_hy2;      pause_or_exit ;;
+      5) hy2_show_links;         pause_or_exit ;;
       0) return 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
