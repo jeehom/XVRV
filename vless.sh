@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 20:13"
+SCRIPT_VERSION="2026-01-01 20:17"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -1369,12 +1369,12 @@ auto_check_self_update() {
   remote_ts="$(date -d "$remote_ver" +%s 2>/dev/null || echo 0)"
 
   # 如果解析失败（=0），就退化为“不提示”，避免误报
-  if [[ "$local_ts" -le 0 || "$remote_ts" -le 0 ]]; 键，然后
+  if [[ "$local_ts" -le 0 || "$remote_ts" -le 0 ]]; then
     return 0
   fi
 
   # 远端不比本地新：不提示（包括远端更旧的情况）
-  if [[ "$remote_ts" -le "$local_ts" ]]; 键，然后
+  if [[ "$remote_ts" -le "$local_ts" ]]; then
     return 0
   fi
 
@@ -1383,7 +1383,7 @@ auto_check_self_update() {
   echo "    本地：${local_ver}"
   echo "    远端：${remote_ver}"
   read -r -p "是否现在更新脚本？输入 yes 更新（回车跳过）： " ans
-  if [[ "${ans:-}" == "yes" ]]; 键，然后
+  if [[ "${ans:-}" == "yes" ]]; then
     UPDATE_SELF_MODE="auto" update_self
   fi
 }
@@ -1407,7 +1407,7 @@ auto_check_xray_update() {
   # 避免降级：installed >= latest 就不提示
   local newest
   newest="$(printf "%s\n%s\n" "$installed_ver" "$latest_ver" | sort -V | tail -n 1)"
-  if [[ "$newest" == "$installed_ver" ]]; 键，然后
+  if [[ "$newest" == "$installed_ver" ]]; then
     return 0
   fi
 
@@ -1416,7 +1416,7 @@ auto_check_xray_update() {
   echo "    当前：${installed_ver}"
   echo "    最新：${latest_ver}"
   read -r -p "是否现在更新 Xray？输入 yes 更新（回车跳过）： " ans
-  if [[ "${ans:-}" == "yes" ]]; 键，然后
+  if [[ "${ans:-}" == "yes" ]]; then
     update_xray
   fi
 }
@@ -1437,7 +1437,7 @@ update_self() {
   echo "本地脚本版本：${local_ver}"
 
   target="${SELF_INSTALL_PATH_DEFAULT}"
-  if [[ "$(readlink -f "$cur" 2>/dev/null || echo "$cur")" == "$target" ]]; 键，然后
+  if [[ "$(readlink -f "$cur" 2>/dev/null || echo "$cur")" == "$target" ]]; then
     target="$cur"
   fi
   echo "将更新到：${target}"
