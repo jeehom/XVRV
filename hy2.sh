@@ -141,7 +141,7 @@ inst_cert(){
                 green "建议如下："
                 yellow "1. 请确保CloudFlare小云朵为关闭状态(仅限DNS), 其他域名解析或CDN网站设置同理"
                 yellow "2. 请检查DNS解析设置的IP是否为VPS的真实IP"
-                yellow "3. 建议截图检查域名解析设置"
+                yellow "3. 脚本可能跟不上时代, 建议截图发布到GitHub Issues、GitLab Issues、论坛或TG群询问"
                 exit 1
             fi
         fi
@@ -226,28 +226,6 @@ inst_site(){
     yellow "使用在 Hysteria 2 节点的伪装网站为：$proxysite"
 }
 
-# 新增：限速设置函数
-inst_limit(){
-    echo ""
-    yellow "设置 Hysteria 2 速率限制 (单位支持 mbps, kbps, gbps 等)"
-    yellow "直接回车则不限制速度"
-    echo ""
-    read -p "请输入上行速度限制 (例如 50 mbps): " up_limit
-    read -p "请输入下行速度限制 (例如 100 mbps): " down_limit
-    
-    if [[ -n $up_limit ]]; then
-        yellow "上行速度限制已设置为：$up_limit"
-    else
-        green "上行速度不限制"
-    fi
-    
-    if [[ -n $down_limit ]]; then
-        yellow "下行速度限制已设置为：$down_limit"
-    else
-        green "下行速度不限制"
-    fi
-}
-
 insthysteria(){
     warpv6=$(curl -s6m8 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
     warpv4=$(curl -s4m8 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
@@ -266,11 +244,10 @@ insthysteria(){
     fi
     ${PACKAGE_INSTALL} curl wget sudo qrencode procps iptables-persistent netfilter-persistent
 
-    # 使用官方安装方式或通用脚本，这里保留原脚本的逻辑但改用静默方式下载，或者你可以替换为官方: bash <(curl -fsSL https://get.hy2.sh/)
-    # 为了保证脚本兼容性，我们暂时使用 get.hy2.sh 安装最新核心
-    bash <(curl -fsSL https://get.hy2.sh/)
-    
-    # 检查是否安装成功
+    wget -N https://raw.githubusercontent.com/Misaka-blog/hysteria-install/main/hy2/install_server.sh
+    bash install_server.sh
+    rm -f install_server.sh
+
     if [[ -f "/usr/local/bin/hysteria" ]]; then
         green "Hysteria 2 安装成功！"
     else
@@ -283,10 +260,8 @@ insthysteria(){
     inst_port
     inst_pwd
     inst_site
-    inst_limit  # 调用限速设置
 
     # 设置 Hysteria 配置文件
-    # 先写入基础配置
     cat << EOF > /etc/hysteria/config.yaml
 listen: :$port
 
@@ -304,18 +279,6 @@ auth:
   type: password
   password: $auth_pwd
 
-EOF
-
-    # 动态写入限速配置
-    if [[ -n $up_limit ]] || [[ -n $down_limit ]]; then
-        echo "bandwidth:" >> /etc/hysteria/config.yaml
-        [[ -n $up_limit ]] && echo "  up: $up_limit" >> /etc/hysteria/config.yaml
-        [[ -n $down_limit ]] && echo "  down: $down_limit" >> /etc/hysteria/config.yaml
-        echo "" >> /etc/hysteria/config.yaml
-    fi
-
-    # 写入剩余配置 (masquerade)
-    cat << EOF >> /etc/hysteria/config.yaml
 masquerade:
   type: proxy
   proxy:
@@ -403,7 +366,7 @@ dns:
     - 1.1.1.1
     - 114.114.114.114
 proxies:
-  - name: Hysteria2
+  - name: hy2-Hysteria2
     type: hysteria2
     server: $last_ip
     port: $port
@@ -414,15 +377,15 @@ proxy-groups:
   - name: Proxy
     type: select
     proxies:
-      - Hysteria2
+      - hy2-Hysteria2
       
 rules:
   - GEOIP,CN,DIRECT
   - MATCH,Proxy
 EOF
-    url="hysteria2://$auth_pwd@$last_ip:$last_port/?insecure=1&sni=$hy_domain#Hysteria2"
+    url="hysteria2://$auth_pwd@$last_ip:$last_port/?insecure=1&sni=$hy_domain#hy2-Hysteria2"
     echo $url > /root/hy/url.txt
-    nohopurl="hysteria2://$auth_pwd@$last_ip:$port/?insecure=1&sni=$hy_domain#Hysteria2"
+    nohopurl="hysteria2://$auth_pwd@$last_ip:$port/?insecure=1&sni=$hy_domain#hy2-Hysteria2"
     echo $nohopurl > /root/hy/url-nohop.txt
 
     systemctl daemon-reload
@@ -431,7 +394,7 @@ EOF
     if [[ -n $(systemctl status hysteria-server 2>/dev/null | grep -w active) && -f '/etc/hysteria/config.yaml' ]]; then
         green "Hysteria 2 服务启动成功"
     else
-        red "Hysteria 2 服务启动失败，请运行 systemctl status hysteria-server 查看服务状态" && exit 1
+        red "Hysteria 2 服务启动失败，请运行 systemctl status hysteria-server 查看服务状态并反馈，脚本退出" && exit 1
     fi
     red "======================================================================================"
     green "Hysteria 2 代理服务安装完成"
@@ -509,18 +472,14 @@ changeport(){
 }
 
 changepasswd(){
-    # 这里原来的 grep 逻辑在加入 limit 后可能会有行号变化，建议使用更精确的替换，但为保持脚本结构暂不重写复杂sed
-    # 如果配置文件格式被 inst_limit 改变，行号可能不准，因此这里建议直接告诉用户去修改文件或重装
-    # 简单的做法是重新匹配 password 字段
-    
-    oldpasswd=$(grep "password: " /etc/hysteria/config.yaml | head -n 1 | awk '{print $2}')
+    oldpasswd=$(cat /etc/hysteria/config.yaml 2>/dev/null | sed -n 15p | awk '{print $2}')
 
     read -p "设置 Hysteria 2 密码（回车跳过为随机字符）：" passwd
     [[ -z $passwd ]] && passwd=$(date +%s%N | md5sum | cut -c 1-8)
 
-    sed -i "s#password: $oldpasswd#password: $passwd#g" /etc/hysteria/config.yaml
-    sed -i "s#$oldpasswd#$passwd#g" /root/hy/hy-client.yaml
-    sed -i "s#$oldpasswd#$passwd#g" /root/hy/hy-client.json
+    sed -i "1s#$oldpasswd#$passwd#g" /etc/hysteria/config.yaml
+    sed -i "1s#$oldpasswd#$passwd#g" /root/hy/hy-client.yaml
+    sed -i "3s#$oldpasswd#$passwd#g" /root/hy/hy-client.json
 
     stophysteria && starthysteria
 
@@ -553,7 +512,7 @@ changeproxysite(){
     
     inst_site
 
-    sed -i "s#$oldproxysite#$proxysite#g" /etc/hysteria/config.yaml
+    sed -i "s#$oldproxysite#$proxysite#g" /etc/caddy/Caddyfile
 
     stophysteria && starthysteria
 
@@ -589,20 +548,11 @@ showconf(){
     red "$(cat /root/hy/url-nohop.txt)"
 }
 
-# 更新内核函数：使用官方脚本进行更新
 update_core(){
-    green "正在使用 Hysteria 官方脚本更新内核..."
-    # 使用官方的一键安装脚本，它会自动检测并更新二进制文件
-    bash <(curl -fsSL https://get.hy2.sh/)
+    wget -N https://raw.githubusercontent.com/Misaka-blog/hysteria-install/main/hy2/install_server.sh
+    bash install_server.sh
     
-    # 重启服务使更新生效
-    systemctl restart hysteria-server
-    
-    if systemctl is-active --quiet hysteria-server; then
-        green "Hysteria 2 内核更新完成并已重启服务！"
-    else
-        red "更新后服务启动失败，请检查日志。"
-    fi
+    rm -f install_server.sh
 }
 
 menu() {
@@ -618,7 +568,7 @@ menu() {
     echo -e " ${GREEN}4.${PLAIN} 修改 Hysteria 2 配置"
     echo -e " ${GREEN}5.${PLAIN} 显示 Hysteria 2 配置文件"
     echo " -------------"
-    echo -e " ${GREEN}6.${PLAIN} 更新 Hysteria 2 内核 (官方源)"
+    echo -e " ${GREEN}6.${PLAIN} 更新 Hysteria 2 内核"
     echo " -------------"
     echo -e " ${GREEN}0.${PLAIN} 退出脚本"
     echo ""
