@@ -991,7 +991,7 @@ menu_rollback() {
 pause_or_exit() {
   echo
   while true; do
-    read -r -p "（回车）返回主菜单 / 输入 0 退出： " ans
+    read -r -p "（回车）继续 / 输入 0 退出脚本： " ans
     case "${ans:-}" in
       "") return 0 ;;
       0) exit 0 ;;
