@@ -6,7 +6,7 @@ set -euo pipefail
 # 使用方法：bash -c 'curl -fsSL "https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh" -o /usr/local/bin/vless && chmod +x /usr/local/bin/vless && exec /usr/local/bin/vless'
 # ============================================================
 
-SCRIPT_VERSION="2026-01-01 21:15"
+SCRIPT_VERSION="2026-01-01 21:19"
 AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
@@ -1690,13 +1690,26 @@ hy2_random_password() {
 }
 
 hy2_parse_listen_port() {
-  # 从 /etc/hysteria/config.yaml 里抓 listen: :443 / 0.0.0.0:443
   [[ -f "$HY2_CFG" ]] || { echo ""; return 0; }
-  local v
-  v="$(awk -F': *' '/^[[:space:]]*listen:[[:space:]]*/ {print $2; exit}' "$HY2_CFG" | tr -d '\r' || true)"
-  [[ -n "$v" ]] || { echo ""; return 0; }
-  echo "${v##*:}"
+
+  local line val port
+  line="$(grep -E '^[[:space:]]*listen[[:space:]]*:' "$HY2_CFG" | head -n 1 || true)"
+  [[ -n "$line" ]] || { echo ""; return 0; }
+
+  # 去掉 "listen:" 前缀和空格/引号
+  val="${line#*:}"
+  val="$(echo "$val" | tr -d ' "' )"
+
+  # 取最后一个冒号后的部分作为端口（IPv6/IPv4/空host都兼容）
+  port="${val##*:}"
+
+  if [[ "$port" =~ ^[0-9]{1,5}$ ]] && [[ "$port" -ge 1 && "$port" -le 65535 ]]; then
+    echo "$port"
+  else
+    echo ""
+  fi
 }
+
 
 hy2_read_password_from_cfg() {
   [[ -f "$HY2_CFG" ]] || { echo ""; return 0; }
@@ -1836,7 +1849,7 @@ hy2_show_links() {
   # 读取向导保存的链接偏好
   if [[ -f "$HY2_LINK_ENV" ]]; then
     # shellcheck disable=SC1090
-    . "$HY2_LINK_ENV" || true
+    。 "$HY2_LINK_ENV" || true
   fi
 
   host="${HY2_LINK_HOST:-${ip:-<你的服务器IP>}}"
@@ -1859,7 +1872,7 @@ hy2_show_links() {
   hop_start="" ; hop_end=""
   if [[ -f "$HY2_PORT_HOPPING_ENV" ]]; then
     # shellcheck disable=SC1090
-    . "$HY2_PORT_HOPPING_ENV" || true
+    。 "$HY2_PORT_HOPPING_ENV" || true
     hop_start="${HY2_HOP_START:-}"
     hop_end="${HY2_HOP_END:-}"
   fi
@@ -2052,7 +2065,7 @@ EOF
   hy2_show_links
 
   hy2_open_firewall_hints "$port"
-  systemctl --no-pager isn’t possible? true
+  systemctl --no-pager isn't possible? true
 }
 
 
