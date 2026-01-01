@@ -3,18 +3,10 @@ set -euo pipefail
 
 # ============================================================
 # Xray VLESS + REALITY + Vision 管理脚本（Debian/Ubuntu）
-# - 安装/卸载
-# - 多用户 UUID 管理
-# - 修改端口
-# - 分流：指定域名走 IPv4 出口
-# - 配置自动备份/回滚（每次修改前备份 config.json.bak-时间戳）
-#
-# 安装交互流程（按你的要求）：
-#   1) 选择监听端口（默认：随机端口，回车使用默认）
-#   2) 输入 SNI（支持 域名:端口，会自动拆分）。默认 icloud.com（回车使用默认）
-#   3) DEST 默认自动用 SNI域名:443，可覆盖（回车使用默认）
 # ============================================================
 
+SCRIPT_VERSION="2026-01-01 10:13"
+AUTO_CHECK_UPDATES="${AUTO_CHECK_UPDATES:-1}"   # 1=启用；0=关闭
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_ETC_DIR="/etc/xray"
 XRAY_CFG="${XRAY_ETC_DIR}/config.json"
@@ -25,6 +17,8 @@ GAI_CONF="/etc/gai.conf"
 IPV6_SYSCTL_DROPIN="/etc/sysctl.d/99-xray-disable-ipv6.conf"
 SELF_URL="${SELF_URL:-https://raw.githubusercontent.com/jeehom/XVRV/main/vless.sh}"
 SELF_INSTALL_PATH_DEFAULT="/usr/local/bin/vless"
+
+
 
 
 # 默认值（可用环境变量覆盖）
