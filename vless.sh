@@ -396,7 +396,7 @@ gen_reality_keypair() {
   out="$("${XRAY_BIN}" x25519 2>&1 || true)"
 
   priv="$(echo "$out" | awk -F': *' '/^(Private key|PrivateKey):/ {print $2; exit}')"
-  pub="$(echo "$out" | awk -F': *' '/^(Public key|Password):/ {print $2; exit}')"
+  pub="$(echo "$out" | awk -F': *' '/^(Public key|Password.*):/ {print $2; exit}')"
 
   if [[ -z "$priv" || -z "$pub" ]]; then
     echo "$out" >&2
